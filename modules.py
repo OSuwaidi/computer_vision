@@ -1,6 +1,5 @@
 # بسم الله الرحمن الرحيم و به نستعين
 
-from typing import Union
 from torchvision.ops import deform_conv2d
 import torch
 import torch.nn as nn
@@ -52,28 +51,37 @@ class DeformableConv2d(nn.Module):
 
 class FreezeConnect(nn.Module):
     def __init__(self, p=0.5, is_bias=True):
+        """
+        p: Probability of selecting gradients to be scaled down.
+        is_bias: Whether to apply the scaling to the bias gradients as well.
+
+        Example usage:
+        self.freeze_connect = FreezeConnect(p=0.5)
+        self.freeze_connect(self.fc1)
+        self.freeze_connect(self.fc2)
+        """
         super().__init__()
         self.p = p
         self.is_bias = is_bias
-        self.eps = 1e-11
 
-    def grad_freeze_hook(self, grad: torch.Tensor):
-        # mask = (torch.rand_like(grad) > self.p).float() / (1 - self.p)
+    def grad_freeze_hook(self, grad: torch.Tensor) -> torch.Tensor:
+        # TODO: make the mask be per neuron (acts per row of the gradient matrix)
 
-        # Random:
-        # mask = torch.bernoulli(torch.full_like(grad, 1 - self.p)) / (1 - self.p)
+        # Create a binary mask with probability "p" of zeroing out the gradient:
+        mask = (torch.rand_like(grad) > self.p).float()  # or: mask = torch.bernoulli(grad, 1 - self.p)
 
-        # Deterministic:
-        mask = torch.bernoulli(torch.full_like(grad, 1 - self.p))
-        mask = (mask * mask.numel()) / (mask.count_nonzero() + self.eps)
+        # Scale remaining gradients to keep the overall gradient magnitude consistent:
+        return grad * mask / (1 - self.p)  # or: "return grad * mask * mask.numel() / (mask.count_nonzero() + 1e-8)"
 
-        # OR:
-        # mask = torch.rand_like(grad) > self.p  # Slow down the learning by "slow_rate" fraction
-        # grad[~mask] *= slow_rate
-        return mask * grad
+        # Soft FreezeConnect:
+        # return grad * (mask + (1 - mask) * self.slow_factor)
 
-    def forward(self, module: Union[nn.Conv2d, nn.Linear]):
+    def forward(self, module: nn.Conv2d | nn.Linear):
+        # Register hook for weights:
         module.weight.register_hook(self.grad_freeze_hook)
-        if self.is_bias:
+
+        # Register hook for bias if applicable and "is_bias" is True:
+        if self.is_bias and module.bias is not None:
             module.bias.register_hook(self.grad_freeze_hook)
+
         return module
