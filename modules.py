@@ -7,9 +7,9 @@ import torch.nn.init as init
 
 
 class FlexPool(nn.Module):
-    def __init__(self, layer_shape):
+    def __init__(self, feature_map_shape):
         super().__init__()
-        self.weights = nn.Parameter(torch.zeros(layer_shape, layer_shape))
+        self.weights = nn.Parameter(torch.zeros(feature_map_shape, feature_map_shape))  # to apply in ResNet: feature_map_shape: int = ceil(image_shape / 4)
 
     def forward(self, x):
         fp = self.weights.view(-1).softmax(0).view(self.weights.shape)  # FlexPool weights

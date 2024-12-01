@@ -3,8 +3,6 @@
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.init as init
-import torch
-from math import ceil
 
 
 def _weights_init(m):
@@ -29,7 +27,7 @@ class LambdaLayer(nn.Module):
 
 
 class BasicBlock(nn.Module):
-    def __init__(self, in_dims, out_dims, act, stride=1, kernel_size=3, option='A'):
+    def __init__(self, in_dims, out_dims, act, stride=1, kernel_size=3, option='B'):
         super().__init__()
         self.act = act
         self.conv1 = nn.Conv2d(in_dims, out_dims, kernel_size, stride, 1)
@@ -56,12 +54,12 @@ class BasicBlock(nn.Module):
     def forward(self, x):
         out = self.bn1(self.act(self.conv1(x)))
         out = self.bn2(self.conv2(out))
-        out = out + self.shortcut(x)
+        out += self.shortcut(x)
         return self.act(out)
 
 
 class ResNet(nn.Module):
-    def __init__(self, in_shape, in_dims, num_blocks, num_classes, act,):
+    def __init__(self, in_dims, num_blocks, num_classes, act,):
         super().__init__()
         self.act = act
         # Initialize relevant parameters and convolutional residual blocks:
@@ -71,8 +69,6 @@ class ResNet(nn.Module):
         self.layer1 = self._make_layer(self.initial_dims, num_blocks[0], stride=1)
         self.layer2 = self._make_layer(32, num_blocks[1], stride=2)
         self.layer3 = self._make_layer(64, num_blocks[2], stride=2)
-        layer_shape = ceil(in_shape / 4)
-        self.flex_pool = nn.Parameter(torch.zeros(layer_shape, layer_shape))
         self.linear = nn.Linear(64, num_classes)
 
         self.apply(_weights_init)
@@ -90,30 +86,29 @@ class ResNet(nn.Module):
         out = self.layer1(out)  # (BS, 16, H, W)
         out = self.layer2(out)  # (BS, 32, H//2, W//2)
         out = self.layer3(out)  # (BS, 64, H//4, W//4)
-        fp = self.flex_pool.view(-1).softmax(0).view(self.flex_pool.shape)  # FlexPool weights
-        out = (out * fp).sum((2, 3))  # (BS, 64)
+        out = F.adaptive_avg_pool2d(out, 1).flatten(1)  # (BS, 64)
         return self.linear(out)
 
 
-def resnet20(in_shape, in_dims=3, num_classes=10, act=F.relu,):
-    return ResNet(in_shape, in_dims, [3, 3, 3], num_classes, act)  # 3 stages, with 3 res-blocks per stage
+def resnet20(in_dims=3, num_classes=10, act=F.relu,):
+    return ResNet(in_dims, [3, 3, 3], num_classes, act)  # 3 stages, with 3 res-blocks per stage
 
 
-def resnet32(in_shape, in_dims=3, num_classes=10, act=F.relu,):
-    return ResNet(in_shape, in_dims, [5, 5, 5], num_classes, act,)  # 3 stages, with 5 res-blocks per stage
+def resnet32(in_dims=3, num_classes=10, act=F.relu,):
+    return ResNet(in_dims, [5, 5, 5], num_classes, act,)  # 3 stages, with 5 res-blocks per stage
 
 
-def resnet44(in_shape, in_dims=3, num_classes=10, act=F.relu,):
-    return ResNet(in_shape, in_dims, [7, 7, 7], num_classes, act,)
+def resnet44(in_dims=3, num_classes=10, act=F.relu,):
+    return ResNet(in_dims, [7, 7, 7], num_classes, act,)
 
 
-def resnet56(in_shape, in_dims=3, num_classes=10, act=F.relu,):
-    return ResNet(in_shape, in_dims, [9, 9, 9], num_classes, act,)
+def resnet56(in_dims=3, num_classes=10, act=F.relu,):
+    return ResNet(in_dims, [9, 9, 9], num_classes, act,)
 
 
-def resnet110(in_shape, in_dims=3, num_classes=10, act=F.relu,):
-    return ResNet(in_shape, in_dims, [18, 18, 18], num_classes, act,)
+def resnet110(in_dims=3, num_classes=10, act=F.relu,):
+    return ResNet(in_dims, [18, 18, 18], num_classes, act,)
 
 
-def resnet1202(in_shape, in_dims=3, num_classes=10, act=F.relu,):
-    return ResNet(in_shape, in_dims, [200, 200, 200], num_classes, act,)
+def resnet1202(in_dims=3, num_classes=10, act=F.relu,):
+    return ResNet(in_dims, [200, 200, 200], num_classes, act,)
