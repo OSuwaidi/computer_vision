@@ -1,54 +1,78 @@
 # بِسْمِ ٱللَّٰهِ ٱلرَّحْمَٰنِ ٱلرَّحِيمِ و به نستعين
 
 import torch
-from torchvision import datasets, transforms
-from tqdm import tqdm, trange
-from torch.utils.data import DataLoader
-import torch.nn.functional as F
 import numpy as np
+import random
 from resnet import resnet20
+from torchvision import datasets, transforms
+from torch.utils.data import DataLoader
+from tqdm import trange, tqdm
+import torch.nn.functional as F
+from matplotlib import pyplot as plt
+
+seed = 42
+torch.manual_seed(seed)
+torch.cuda.manual_seed(seed)
+# torch.cuda.manual_seed_all(seed)  # For multi-GPU setups
+np.random.seed(seed)
+random.seed(seed)
+torch.backends.cudnn.deterministic = True
 
 device = torch.device('cuda')
 torch.cuda.empty_cache()
 
-norm = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-train_T = transforms.Compose([transforms.RandomHorizontalFlip(p=0.25), transforms.RandomCrop(32, padding=4), transforms.ToTensor(), norm])
+# Define hyperparameters:
+BS = 32
+LR = 0.07
+EPOCHS = 101
+
+model = resnet20(3, 10).to(device)
+
+norm = transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2023, 0.1994, 0.2010])
+train_T = transforms.Compose([transforms.RandomHorizontalFlip(p=0.25), transforms.RandomCrop(32, padding=4), transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1), transforms.ToTensor(), norm])
 test_T = transforms.Compose([transforms.ToTensor(), norm])
 
 train_data = datasets.CIFAR10(root='datasets/CIFAR10', train=True, transform=train_T, download=True)
-test_data = datasets.CIFAR10(root='datasets/CIFAR10', train=False, transform=test_T, download=True)
+test_data = datasets.CIFAR10(root='datasets/CIFAR10', train=False, transform=test_T)
 
-BS = 100
-LR = 0.3
-EPOCHS = 10
+# If you set "num_workers" > 0, each worker in "DataLoader" will have its own RNG state, independent on the global RNG
+train_loader = DataLoader(train_data, batch_size=BS, shuffle=True, pin_memory=True, num_workers=4, generator=torch.Generator().manual_seed(seed))
+test_loader = DataLoader(test_data, batch_size=10_000, pin_memory=True, num_workers=4)
 
-train_loader = DataLoader(train_data, batch_size=BS, shuffle=True, pin_memory=True)
-test_loader = DataLoader(test_data, batch_size=1000, pin_memory=True)
-
-m = resnet20(32).to(device)
 # Note: the "lr" value you use in "optim" doesn't matter since it depends on the value you input into the "scheduler"
-optim = torch.optim.SGD(m.parameters(), lr=LR, momentum=0.9, weight_decay=1e-4)  # As weight_decay increases, more weight penalization (more sensitive to large weights)
+optim = torch.optim.SGD(model.parameters(), lr=LR, momentum=0.9, weight_decay=1e-4)  # As weight_decay increases, more weight penalization (more sensitive to large weights)
 # Therefore, harder/slower to achieve convergence, but more robust against overfitting (more generalizable).
 # As batch size decreases, weight decay should also decrease (need more room/flexibility when dealing with noisy updates)
 # As model gets more complex (more parameters) increasing the weight decay hinders the learning process, thus reducing overall performance and vice-versa!
 # As model gets less complex (fewer parameters), it's easier for the model to fit the training data (even though not as good of a fit)
 scheduler = torch.optim.lr_scheduler.OneCycleLR(optim, LR, epochs=EPOCHS, steps_per_epoch=len(train_loader))
 
-for e in trange(EPOCHS):
-    for x, y in train_loader:
+losses = []
+for _ in trange(EPOCHS, desc="Training Epochs"):
+    epoch_loss = 0
+    for x, y in tqdm(train_loader):
         x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
-        loss = F.cross_entropy(m(x), y)
+
+        loss = F.cross_entropy(model(x), y)
+        epoch_loss += loss.item()
         loss.backward()
         optim.step()
-        scheduler.step()
         optim.zero_grad()
 
-m.eval()
-accuracy = []
-with torch.no_grad():
-    for x, y in tqdm(test_loader):
-        x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
-        _, preds = m(x).max(1)
-        accuracy.append((preds == y).float().mean().item())
+    losses.append(epoch_loss/len(train_loader))
 
-print(f'Accuracy: {np.mean(accuracy)*100:.4}%')
+model.eval()
+accuracy = 0
+with torch.no_grad():
+    for x, y in tqdm(test_loader, desc="Evaluating"):
+        x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
+        predictions = model(x).argmax(1)
+        accuracy += (predictions == y).float().sum().item()
+
+print(f'Accuracy: {accuracy/len(test_data)*100:.4}%')
+
+plt.plot(losses)
+plt.xlabel("Epoch")
+plt.ylabel("Loss")
+plt.title("Default Training Loss")
+plt.savefig("training_loss.png")
