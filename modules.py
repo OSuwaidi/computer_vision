@@ -77,7 +77,7 @@ class FreezeConnect(nn.Module):
         # return grad * (mask + (1 - mask) * self.slow_factor)
 
     def forward(self, module: nn.Conv2d | nn.Linear):
-        # Register hook for weights:
+        # Register (backward) hook for weights:
         module.weight.register_hook(self.grad_freeze_hook)
 
         # Register hook for bias if applicable and "is_bias" is True:

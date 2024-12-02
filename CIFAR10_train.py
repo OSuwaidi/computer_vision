@@ -5,8 +5,8 @@ import numpy as np
 import random
 from resnet import resnet20
 from torchvision import datasets, transforms
-from torch.utils.data import DataLoader
-from tqdm import trange, tqdm
+from torch.utils.data import DataLoader, Subset
+from tqdm.auto import trange, tqdm
 import torch.nn.functional as F
 from matplotlib import pyplot as plt
 
@@ -22,9 +22,10 @@ device = torch.device('cuda')
 torch.cuda.empty_cache()
 
 # Define hyperparameters:
-BS = 32
+BS = 64
 LR = 0.07
 EPOCHS = 101
+NUM_WORKERS = 0
 
 model = resnet20(3, 10).to(device)
 
@@ -36,8 +37,8 @@ train_data = datasets.CIFAR10(root='datasets/CIFAR10', train=True, transform=tra
 test_data = datasets.CIFAR10(root='datasets/CIFAR10', train=False, transform=test_T)
 
 # If you set "num_workers" > 0, each worker in "DataLoader" will have its own RNG state, independent on the global RNG
-train_loader = DataLoader(train_data, batch_size=BS, shuffle=True, pin_memory=True, num_workers=4, generator=torch.Generator().manual_seed(seed))
-test_loader = DataLoader(test_data, batch_size=10_000, pin_memory=True, num_workers=4)
+train_loader = DataLoader(train_data, batch_size=BS, shuffle=True, pin_memory=True, num_workers=NUM_WORKERS, generator=torch.Generator().manual_seed(seed))
+test_loader = DataLoader(test_data, batch_size=10_000, pin_memory=True, num_workers=NUM_WORKERS)
 
 # Note: the "lr" value you use in "optim" doesn't matter since it depends on the value you input into the "scheduler"
 optim = torch.optim.SGD(model.parameters(), lr=LR, momentum=0.9, weight_decay=1e-4)  # As weight_decay increases, more weight penalization (more sensitive to large weights)
@@ -48,9 +49,9 @@ optim = torch.optim.SGD(model.parameters(), lr=LR, momentum=0.9, weight_decay=1e
 scheduler = torch.optim.lr_scheduler.OneCycleLR(optim, LR, epochs=EPOCHS, steps_per_epoch=len(train_loader))
 
 losses = []
-for _ in trange(EPOCHS, desc="Training Epochs"):
+for e in trange(EPOCHS, desc="Training Epochs", leave=True):
     epoch_loss = 0
-    for x, y in tqdm(train_loader):
+    for x, y in tqdm(train_loader, leave=False, desc=f"Epoch {e+1}/{EPOCHS} Progress", position=0):
         x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
 
         loss = F.cross_entropy(model(x), y)

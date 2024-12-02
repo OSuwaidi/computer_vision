@@ -71,7 +71,7 @@ class ResNet(nn.Module):
         self.layer3 = self._make_layer(64, num_blocks[2], stride=2)
         self.linear = nn.Linear(64, num_classes)
 
-        self.apply(_weights_init)
+        self.apply(_weights_init)  # applies function on "model.modules()" (recursively)
 
     def _make_layer(self, out_dims, num_blocks, stride):
         strides = [stride] + [1] * (num_blocks - 1)
