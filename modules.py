@@ -50,38 +50,50 @@ class DeformableConv2d(nn.Module):
 
 
 class FreezeConnect(nn.Module):
-    def __init__(self, p=0.5, is_bias=True):
+    def __init__(self, p=0.5, bias=True):
         """
         p: Probability of selecting gradients to be scaled down.
-        is_bias: Whether to apply the scaling to the bias gradients as well.
+        bias: Whether to apply the freezing and scaling to the bias gradients as well.
 
         Example usage:
         self.freeze_connect = FreezeConnect(p=0.5)
-        self.freeze_connect(self.fc1)
-        self.freeze_connect(self.fc2)
+        self.freeze_connect(self.fc)
+        self.freeze_connect(self.conv)
         """
         super().__init__()
+        if not (0 < p < 1):
+            raise ValueError("p must be a value between 0 and 1 (exclusive)")
+
         self.p = p
-        self.is_bias = is_bias
+        self.bias = bias
 
-    def grad_freeze_hook(self, grad: torch.Tensor) -> torch.Tensor:
-        # TODO: make the mask be per neuron (acts per row of the gradient matrix)
-
+    def grad_freeze_hook_w(self, grad: torch.Tensor) -> torch.Tensor:
         # Create a binary mask with probability "p" of zeroing out the gradient:
-        mask = (torch.rand_like(grad) > self.p).float()  # or: mask = torch.bernoulli(grad, 1 - self.p)
+        mask = (torch.rand_like(grad) > self.p).float().flatten(1)  # or: mask = torch.bernoulli(grad, 1 - self.p)
 
         # Scale remaining gradients to keep the overall gradient magnitude consistent:
-        return grad * mask / (1 - self.p)  # or: "return grad * mask * mask.numel() / (mask.count_nonzero() + 1e-8)"
+        scale = mask.size(1) / (mask.sum(1) + 1e-8)
+        mask = (mask * scale.unsqueeze(1)).view(grad.shape)
 
-        # Soft FreezeConnect:
-        # return grad * (mask + (1 - mask) * self.slow_factor)
+        return grad * mask  # Soft FreezeConnect: return grad * (mask + (1 - mask) * self.slow_factor)
+
+    def grad_freeze_hook_b(self, grad: torch.Tensor) -> torch.Tensor:
+        mask = (torch.rand_like(grad) > self.p).float()
+        scale = len(mask) / (mask.sum() + 1e-8)
+
+        return grad * mask * scale
 
     def forward(self, module: nn.Conv2d | nn.Linear):
-        # Register (backward) hook for weights:
-        module.weight.register_hook(self.grad_freeze_hook)
+        if not isinstance(module, (nn.Conv2d, nn.Linear)):
+            raise TypeError(
+                f"Expected module to be an instance of nn.Conv2d or nn.Linear, but got {type(module).__name__}."
+            )
 
-        # Register hook for bias if applicable and "is_bias" is True:
-        if self.is_bias and module.bias is not None:
-            module.bias.register_hook(self.grad_freeze_hook)
+        # Register (backward) hook for weights:
+        module.weight.register_hook(self.grad_freeze_hook_w)
+
+        # Register hook for bias if applicable and "bias" is True:
+        if self.bias and module.bias is not None:
+            module.bias.register_hook(self.grad_freeze_hook_b)
 
         return module
