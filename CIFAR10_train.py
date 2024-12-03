@@ -54,13 +54,18 @@ for e in trange(EPOCHS, desc="Training Epochs", leave=True):
     for x, y in tqdm(train_loader, leave=False, desc=f"Epoch {e+1}/{EPOCHS} Progress", position=0):
         x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
 
+        # Forward pass and compute loss
         loss = F.cross_entropy(model(x), y)
         epoch_loss += loss.item()
+
+        # Backward pass and optimizer/scheduler step
         loss.backward()
         optim.step()
         optim.zero_grad()
+        scheduler.step()  # OneCycleLR works on a per-batch basis
 
-    losses.append(epoch_loss/len(train_loader))
+    # Log the average loss for each epoch
+    losses.append(epoch_loss / len(train_loader))
 
 model.eval()
 accuracy = 0
