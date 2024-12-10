@@ -1,8 +1,10 @@
 # بسم الله الرحمن الرحيم و به نستعين
 
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.init as init
+from typing import Callable
 
 
 def _weights_init(m):
@@ -15,6 +17,15 @@ def _weights_init(m):
         """
         if m.bias is not None:
             init.constant_(m.bias, 0.01)
+
+
+class Residual(nn.Module):
+    def __init__(self, fn: Callable[[torch.Tensor], torch.Tensor]):
+        super().__init__()
+        self.fn = fn
+
+    def forward(self, x: torch.Tensor):
+        return self.fn(x) + x
 
 
 class LambdaLayer(nn.Module):
@@ -59,7 +70,7 @@ class BasicBlock(nn.Module):
 
 
 class ResNet(nn.Module):
-    def __init__(self, in_dims, num_blocks, num_classes, act,):
+    def __init__(self, in_dims, num_blocks, num_classes, act, ):
         super().__init__()
         self.act = act
         # Initialize relevant parameters and convolutional residual blocks:
@@ -77,7 +88,7 @@ class ResNet(nn.Module):
         strides = [stride] + [1] * (num_blocks - 1)
         layers = []
         for stride in strides:
-            layers.append(BasicBlock(self.initial_dims, out_dims, self.act, stride,))
+            layers.append(BasicBlock(self.initial_dims, out_dims, self.act, stride, ))
             self.initial_dims = out_dims
         return nn.Sequential(*layers)
 
@@ -90,25 +101,25 @@ class ResNet(nn.Module):
         return self.linear(out)
 
 
-def resnet20(in_dims=3, num_classes=10, act=F.relu,):
+def resnet20(in_dims=3, num_classes=10, act=F.relu, ):
     return ResNet(in_dims, [3, 3, 3], num_classes, act)  # 3 stages, with 3 res-blocks per stage
 
 
-def resnet32(in_dims=3, num_classes=10, act=F.relu,):
-    return ResNet(in_dims, [5, 5, 5], num_classes, act,)  # 3 stages, with 5 res-blocks per stage
+def resnet32(in_dims=3, num_classes=10, act=F.relu, ):
+    return ResNet(in_dims, [5, 5, 5], num_classes, act, )  # 3 stages, with 5 res-blocks per stage
 
 
-def resnet44(in_dims=3, num_classes=10, act=F.relu,):
-    return ResNet(in_dims, [7, 7, 7], num_classes, act,)
+def resnet44(in_dims=3, num_classes=10, act=F.relu, ):
+    return ResNet(in_dims, [7, 7, 7], num_classes, act, )
 
 
-def resnet56(in_dims=3, num_classes=10, act=F.relu,):
-    return ResNet(in_dims, [9, 9, 9], num_classes, act,)
+def resnet56(in_dims=3, num_classes=10, act=F.relu, ):
+    return ResNet(in_dims, [9, 9, 9], num_classes, act, )
 
 
-def resnet110(in_dims=3, num_classes=10, act=F.relu,):
-    return ResNet(in_dims, [18, 18, 18], num_classes, act,)
+def resnet110(in_dims=3, num_classes=10, act=F.relu, ):
+    return ResNet(in_dims, [18, 18, 18], num_classes, act, )
 
 
-def resnet1202(in_dims=3, num_classes=10, act=F.relu,):
-    return ResNet(in_dims, [200, 200, 200], num_classes, act,)
+def resnet1202(in_dims=3, num_classes=10, act=F.relu, ):
+    return ResNet(in_dims, [200, 200, 200], num_classes, act, )
