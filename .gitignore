@@ -51,6 +51,8 @@ coverage.xml
 .pytest_cache/
 cover/
 test*.py
+*.png
+*.pth
 
 # Datasets
 datasets/
