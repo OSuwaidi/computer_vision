@@ -22,7 +22,7 @@ class VAE(nn.Module):
         coord = self.fc_c(h).tanh()
         return coord  # (BS, latent_dim)
 
-    def linear_comb(self, coord):
+    def linear_comb(self, coord):  # "torch.einsum('bd,bdo->bo', coord, basis_vectors)" <==> "torch.stack([c @ b for c, b in zip(coord, basis_vectors)])"
         z = coord @ self.basis[:-1]  # (BS, input_dim)
         return z + self.basis[-1]
 
