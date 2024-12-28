@@ -10,8 +10,11 @@ class VAE(nn.Module):
         self.fc1 = nn.Linear(input_dim, hidden_dim)
         self.fc_c = nn.Linear(hidden_dim, latent_dim)
 
-        # Basis
-        self.basis = nn.Parameter(torch.randn(latent_dim + 1, input_dim))
+        # Basis and support point
+        self.basis = nn.Parameter(torch.empty(input_dim, latent_dim))
+        nn.init.xavier_uniform_(self.basis)
+
+        self.support_point = nn.Parameter(torch.zeros(input_dim))
 
         # Decoder
         self.fc2 = nn.Linear(input_dim, hidden_dim)
@@ -23,9 +26,7 @@ class VAE(nn.Module):
         return coord  # (BS, latent_dim)
 
     def linear_comb(self, coord):  # "torch.einsum('bd,bdo->bo', coord, basis_vectors)" <==> "torch.stack([c @ b for c, b in zip(coord, basis_vectors)])"
-        z = coord @ self.basis[:-1]  # (BS, input_dim)
-        return z + self.basis[-1]
-
+        return F.linear(coord, self.basis, self.support_point)  # ==> X @ W.T + b (BS, input_dim)
 
     def decoder(self, coord):
         z = self.linear_comb(coord)
@@ -40,7 +41,7 @@ class VAE(nn.Module):
 
 def vae_loss(recon_x, x):
     # Reconstruction loss (BCE or MSE, depending on data type)
-    recon_loss = F.mse_loss(recon_x, x.view(-1, 784), reduction='sum') / x.size(0)  # Averaged over batch
+    recon_loss = F.mse_loss(recon_x, x, reduction='sum') / x.size(0)  # Averaged over batch
     return recon_loss
 
 

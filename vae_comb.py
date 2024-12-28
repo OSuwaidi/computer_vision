@@ -50,7 +50,7 @@ class VAE(nn.Module):
 
 def vae_loss(recon_x, x, mu, logvar):
     # Reconstruction loss (MSE)
-    recon_loss = F.mse_loss(recon_x, x.view(-1, 784), reduction='sum') / x.size(0)  # Averaged over batch
+    recon_loss = F.mse_loss(recon_x, x, reduction='sum') / x.size(0)  # Averaged over batch
 
     # KL Divergence term
     kl_div = 0.5 * (mu.pow(2) + logvar.exp() - 1 - logvar).sum() / x.size(0)  # Averaged over batch
