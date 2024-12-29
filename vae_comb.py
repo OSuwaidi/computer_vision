@@ -11,8 +11,11 @@ class VAE(nn.Module):
         self.fc_mu = nn.Linear(hidden_dim, latent_dim)
         self.fc_logvar = nn.Linear(hidden_dim, latent_dim)
 
-        # Basis
-        self.basis = nn.Parameter(torch.randn(latent_dim + 1, input_dim))
+        # Basis and support point
+        self.basis = nn.Parameter(torch.empty(input_dim, latent_dim))
+        nn.init.xavier_uniform_(self.basis)
+
+        self.support_point = nn.Parameter(torch.zeros(input_dim))
 
         # Decoder
         self.fc2 = nn.Linear(input_dim, hidden_dim)
@@ -29,12 +32,10 @@ class VAE(nn.Module):
         # Sample epsilon from Normal(0,I)
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
-        coord = mu + eps * std
-        return coord
+        return mu + eps * std
 
     def linear_comb(self, coord):
-        z = coord @ self.basis[:-1]  # (BS, input_dim)
-        return z + self.basis[-1]
+        return F.linear(coord, self.basis, self.support_point)
 
     def decoder(self, coord):
         z = self.linear_comb(coord)

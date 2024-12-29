@@ -22,8 +22,7 @@ class VAE(nn.Module):
 
     def encoder(self, x):
         h = self.fc1(x).relu()
-        coord = self.fc_c(h).tanh()
-        return coord  # (BS, latent_dim)
+        return self.fc_c(h).tanh()  # (BS, latent_dim)
 
     def linear_comb(self, coord):  # "torch.einsum('bd,bdo->bo', coord, basis_vectors)" <==> "torch.stack([c @ b for c, b in zip(coord, basis_vectors)])"
         return F.linear(coord, self.basis, self.support_point)  # ==> X @ W.T + b (BS, input_dim)
