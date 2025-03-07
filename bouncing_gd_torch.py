@@ -5,6 +5,7 @@ from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 from tqdm import trange
 import numpy as np
+import numpy.typing as npt
 import torch.nn.functional as F
 from matplotlib import pyplot as plt
 
@@ -32,7 +33,6 @@ b = torch.randn(100, requires_grad=True)
 wh = torch.randn(100, 10, requires_grad=True)
 bh = torch.randn(10, requires_grad=True)
 
-
 losses_sgd = []
 for _ in trange(EPOCHS):
     loss_batch = []
@@ -58,7 +58,7 @@ with torch.no_grad():
         out = torch.tanh(x @ w + b) @ wh + bh
         _, pred = out.max(1)
         acc.append((pred == y).float().mean().item())
-print(f'Accuracy: {np.mean(acc)*100:.4}%')
+print(f'Accuracy: {np.mean(acc) * 100:.4}%')
 
 ############################################################################################################################################################
 
@@ -75,19 +75,17 @@ wh = torch.randn(100, 10, requires_grad=True)
 bh = torch.randn(10, requires_grad=True)
 
 
-def dist(g1, g2):
-    e = 1e-08
-    d1 = 1 / (g1.norm().item() + e)
-    d2 = 1 / (g2.norm().item() + e)
-    dists = torch.Tensor([d1, d2])
-    dists /= dists.sum()
-    return dists
+def dist(g1: torch.Tensor, g2: torch.Tensor) -> npt.NDArray[float]:
+    e = 1e-11
+    flatness_1, flatness_2 = g1.norm().item(), g2.norm().item()
+    dists = np.array([flatness_2, flatness_1])
+    return dists / (dists.sum() + e)
 
 
 TH = 0.9  # TH value is inversely proportional to "ini"
 shrink = 1.1
-LRw = torch.ones(100)*LR
-LRwh = torch.ones(10)*LR
+LRw = torch.ones(100) * LR
+LRwh = torch.ones(10) * LR
 
 losses_bgd = []
 for _ in trange(EPOCHS):
@@ -104,7 +102,7 @@ for _ in trange(EPOCHS):
         # Find oracle weights:
         oracle_w = w - grad_w * LRw
         oracle_wh = wh - grad_wh * LRwh
-        
+
         # Update bias vectors:
         with torch.no_grad():
             b -= grad_b * LR
@@ -123,7 +121,7 @@ for _ in trange(EPOCHS):
                     d1, d2 = dist(g, g_orc)
                     if d1 > TH:
                         LRw[i] /= shrink
-                    w[:, i] = w[:, i]*d1 + oracle_w[:, i]*d2
+                    w[:, i] = w[:, i] * d1 + oracle_w[:, i] * d2
                 else:
                     w[:, i] = oracle_w[:, i] - g_orc * LRw[i]
 
@@ -134,7 +132,7 @@ for _ in trange(EPOCHS):
                     d1, d2 = dist(g, g_orc)
                     if d1 > TH:
                         LRwh[i] /= shrink
-                    wh[:, i] = wh[:, i]*d1 + oracle_wh[:, i]*d2
+                    wh[:, i] = wh[:, i] * d1 + oracle_wh[:, i] * d2
                 else:
                     wh[:, i] = oracle_wh[:, i] - g_orc * LRwh[i]
 
@@ -147,7 +145,7 @@ with torch.no_grad():
         out = torch.tanh(x @ w + b) @ wh + bh
         _, pred = out.max(1)
         acc.append((pred == y).float().mean().item())
-print(f'Accuracy: {np.mean(acc)*100:.4}%')
+print(f'Accuracy: {np.mean(acc) * 100:.4}%')
 
 plt.gca().text(.5, .8, f'$LR={LR}$', c='orange', size=15, transform=plt.gca().transAxes)
 plt.xlabel('Epochs')
