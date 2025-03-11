@@ -18,8 +18,8 @@ np.random.seed(seed)
 random.seed(seed)
 torch.backends.cudnn.deterministic = True
 
-device = torch.device('cuda')
 torch.cuda.empty_cache()
+device = torch.device('cuda')
 
 # Define hyperparameters:
 BS = 64

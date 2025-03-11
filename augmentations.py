@@ -87,10 +87,10 @@ def equalize_image(src: np.ndarray, brightness=True, saturation=True):
 
 def stabilize_channel(src: np.ndarray):
     img = src.copy()
-    means = img.mean((0, 1))
-    g_mean = means.mean()
-    g_mean /= means
-    img[..., 0], img[..., 1], img[..., 2] = img_clip(img[..., 0] * g_mean[0]), img_clip(img[..., 1] * g_mean[1]), img_clip(img[..., 2] * g_mean[2])
+    means = img.mean((0, 1))  # image's spatial (intensity) mean per channel
+    global_mean = means.mean()  # image's global (across channels) intensity mean
+    global_mean /= means  # mean refactoring
+    img[..., 0], img[..., 1], img[..., 2] = img_clip(img[..., 0] * global_mean[0]), img_clip(img[..., 1] * global_mean[1]), img_clip(img[..., 2] * global_mean[2])
     return img
 
 
