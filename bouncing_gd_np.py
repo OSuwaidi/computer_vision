@@ -9,10 +9,10 @@ import numpy.typing as npt
 type Vec = npt.NDArray[float]  # can represent a matrix as well
 type Input = csr_matrix | Vec
 type LossFunc = Callable[[Input, Vec], float]
-type Gradient = Callable[[Input, Vec], Vec]
+type GradFunc = Callable[[Input, Vec], Vec]
 
 
-def gd(data: Input, loss_f: LossFunc, gradient: Gradient, lr=1, epochs=50, seed=0) -> tuple[Vec, list[float]]:
+def gd(data: Input, loss_f: LossFunc, gradient: GradFunc, lr=1, epochs=50, seed=0) -> tuple[Vec, list[float]]:
     np.random.seed(seed)
     weight = np.random.randn(data.shape[-1])
     losses = [loss_f(data, weight)]
@@ -25,22 +25,24 @@ def gd(data: Input, loss_f: LossFunc, gradient: Gradient, lr=1, epochs=50, seed=
     return weight, losses
 
 
-def bouncy_gd(data: Input, loss_f: LossFunc, gradient: Gradient, lr=1, epochs=50, TH=0.7, seed=0, beta=1) -> tuple[Vec, list[float]]:
+def bouncy_gd(data: Input, loss_f: LossFunc, gradient: GradFunc, lr=1, epochs=50, TH=0.7, seed=0, beta=0.995) -> tuple[Vec, list[float]]:
     np.random.seed(seed)
-    weight = np.random.randn(data.shape[-1])
+    feature_dimensions = data.shape[-1]
+    weight = np.random.randn(feature_dimensions)
     losses = [loss_f(data, weight)]
-    lr = np.ones(data.shape[-1]) * lr  # alpha
+    lr = np.ones(feature_dimensions) * lr  # per weight (parameter) adaptive learning rate
     sw = 1  # v_t
+    e = 1e-08
 
     def dist(g1: Vec, g2: Vec) -> Vec:
-        e = 1e-05
         flatness_1, flatness_2 = np.linalg.norm(g1), np.linalg.norm(g2)
         dists = np.array([flatness_2, flatness_1])
         return dists / (dists.sum() + e)
 
     for _ in trange(epochs):
         g = gradient(data, weight)
-        sw = beta * sw + abs(g)
+        sw = beta * sw + np.abs(g)  # second moment
+
         oracle = weight - g * lr
         g_orc = gradient(data, oracle)
         if g @ g_orc < 0:
