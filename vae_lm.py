@@ -10,7 +10,7 @@ class VAE(nn.Module):
         self.fc1 = nn.Linear(input_dim, hidden_dim)
         self.fc_c = nn.Linear(hidden_dim, latent_dim)
 
-        # Basis and support point
+        # Basis vectors and support point
         self.basis = nn.Parameter(torch.empty(input_dim, latent_dim))
         nn.init.xavier_uniform_(self.basis)
 
@@ -25,7 +25,7 @@ class VAE(nn.Module):
         return self.fc_c(h).tanh()  # (BS, latent_dim)
 
     def linear_comb(self, coord):  # "torch.einsum('bd,bdo->bo', coord, basis_vectors)" <==> "torch.stack([c @ b for c, b in zip(coord, basis_vectors)])"
-        return F.linear(coord, self.basis, self.support_point)  # ==> X @ W.T + b (BS, input_dim)
+        return F.linear(coord, self.basis, self.support_point)  # ==> X (coord) @ W.T (basis) + b (support point)  : shape = (BS, input_dim)
 
     def decoder(self, coord):
         z = self.linear_comb(coord)

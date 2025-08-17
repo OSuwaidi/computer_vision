@@ -11,7 +11,7 @@ class VAE(nn.Module):
         self.fc_mu = nn.Linear(hidden_dim, latent_dim)
         self.fc_logvar = nn.Linear(hidden_dim, latent_dim)
 
-        # Basis and support point
+        # Basis vectors and support point
         self.basis = nn.Parameter(torch.empty(input_dim, latent_dim))
         nn.init.xavier_uniform_(self.basis)
 
