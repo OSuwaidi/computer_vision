@@ -3,7 +3,7 @@
 import torch
 import numpy as np
 import random
-from resnet import resnet20
+from computer_vision.models.resnet import resnet20
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, Subset
 from tqdm.auto import trange, tqdm

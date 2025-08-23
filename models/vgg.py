@@ -15,25 +15,25 @@ class VGG(nn.Module):
     def __init__(self, in_dims, num_classes, vgg_type):
         super().__init__()
         self.in_dims = in_dims
-        self.features = self._make_layers(cfg[vgg_type])
+        self.feature_extractor = self._make_layers(cfg[vgg_type])
         self.classifier = nn.Linear(512, num_classes)
 
     def forward(self, x):
-        out = self.features(x)
+        out = self.feature_extractor(x)
         out = out.view(out.size(0), -1)  # Flatten
         return self.classifier(out)
 
-    def _make_layers(self, cfg):
+    def _make_layers(self, arch):
         layers = []
         in_channels = self.in_dims
-        for depth in cfg:
-            if depth == 'M':
-                layers.append(nn.MaxPool2d(kernel_size=2, stride=2))
+        for layer in arch:
+            if layer == 'M':
+                layers.append(nn.MaxPool2d(kernel_size=2, stride=2))  # can replace with a conv
             else:
-                layers.extend([nn.Conv2d(in_channels, depth, kernel_size=3, padding=1),
+                layers.extend([nn.Conv2d(in_channels, layer, kernel_size=3, padding=1),
                                nn.ReLU(inplace=True),
-                               nn.BatchNorm2d(depth)])
-                in_channels = depth
+                               nn.BatchNorm2d(layer)])
+                in_channels = layer
         return nn.Sequential(*layers)
 
 

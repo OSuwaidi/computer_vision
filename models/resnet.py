@@ -22,7 +22,7 @@ def _weights_init(m):
 class Residual(nn.Module):
     def __init__(self, fn: Callable[[torch.Tensor], torch.Tensor]):
         super().__init__()
-        self.fn = fn
+        self.fn = fn  # usually is nn.Sequential() or a Block
 
     def forward(self, x: torch.Tensor):
         return self.fn(x) + x
