@@ -1,15 +1,11 @@
-import math
 from typing import Callable, Iterable, Optional
 import torch
-from torch.optim.optimizer import Optimizer
+import torch.nn as nn
+from tqdm.auto import trange
+# from torch.optim.optimizer import Optimizer
 
 
-import math
-from typing import Callable, Iterable, Optional
-import torch
-from torch.optim.optimizer import Optimizer
-
-class BounceSGD(Optimizer):
+class BounceSGD:
     r"""
     Args:
         params (iterable): iterable of parameters to optimize or dicts defining parameter groups
@@ -23,9 +19,10 @@ class BounceSGD(Optimizer):
         _eps (float): epsilon for convex weights (default: 1e-12)
         _tolerance (float): maximum value before taking an equidistant weighted average
     """
+
     def __init__(
         self,
-        params: Iterable,
+        model: nn.Module,
         lr: float,
         momentum: float = 0.0,
         weight_decay: float = 0.0,
@@ -36,7 +33,7 @@ class BounceSGD(Optimizer):
         _eps: float = 1e-8,
         _tolerance = 1e-12
     ):
-        if lr < 0.0:
+        if lr <= 0.0:
             raise ValueError(f"Invalid lr: {lr}")
         if momentum < 0.0:
             raise ValueError(f"Invalid momentum: {momentum}")
@@ -44,113 +41,74 @@ class BounceSGD(Optimizer):
             raise ValueError(f"Invalid weight_decay: {weight_decay}")
         if dampening < 0.0:
             raise ValueError(f"Invalid dampening: {dampening}")
-        if lr_scale <= 0.0:
-            raise ValueError(f"Invalid lr_scale: {lr_scale}")
 
-        defaults = dict(
-            lr=lr,
-            momentum=momentum,
-            weight_decay=weight_decay,
-            dampening=dampening,
-            nesterov=nesterov,
-        )
-        super().__init__(params, defaults)
+        self.model = model
+        self.params = model.parameters()
+        self.num_params = len(tuple(self.params))
+        self.device = model.device
+        self.lr = lr
+        self.bounce_th = bounce_th
+        self.lr_scale = lr_scale
+        self._eps = _eps
+        self._tolerance = _tolerance
 
-    @torch.no_grad()
-    def step(self, closure: Optional[Callable[[], float]] = None):
-        # ---- Phase 0: snapshot params and grads (before base step)
-        snapshots = []  # per-group list of (param, prev_param_copy, prev_grad_flat)
-        for group in self.param_groups:
-            group_snaps = []
-            for p in group["params"]:
-                if p.grad is None:
-                    group_snaps.append((p, None, None))
-                    continue
-                if p.grad.is_sparse:
-                    raise RuntimeError("BounceSGD does not support sparse gradients")
-                # true copies (no aliasing)
-                prev_p = p.clone()
-                prev_g = p.grad.clone().reshape(-1)
-                group_snaps.append((p, prev_p, prev_g))
-                # init momentum state
-                state = self.state[p]
-                if "step" not in state:
-                    state["step"] = 0
-                if group["momentum"] != 0 and "momentum_buffer" not in state:
-                    state["momentum_buffer"] = torch.zeros_like(p)
-            snapshots.append(group_snaps)
+    def dist(self, g1: torch.Tensor, g2: torch.Tensor) -> tuple:
+        # Note: `.item()` on a GPU tensor would cause it to sync and transfer (copy) to host (CPU)
+        f1, f2 = torch.linalg.vector_norm(g1), torch.linalg.vector_norm(g2)
+        s = f1 + f2
+        if s < self._tolerance:
+            return 0.5, 0.5
 
-        # ---- Phase 1: base SGD(-like) step
-        for group, group_snaps in zip(self.param_groups, snapshots):
-            lr = group["lr"]
-            wd = group["weight_decay"]
-            mom = group["momentum"]
-            damp = group["dampening"]
-            nesterov = group["nesterov"]
+        s += torch.exp(-s) * self.eps
+        return f2 / s, f1 / s
 
-            for (p, _, _) in group_snaps:
-                grad = p.grad
-                if grad is None:
-                    continue
-                # classic L2 (coupled) decay
-                if wd != 0:
-                    grad = grad.add(p, alpha=wd)
-                state = self.state[p]
-                state["step"] += 1
+    def bounce_update(self, weight: torch.Tensor, oracle: torch.Tensor, gradient_weight: torch.Tensor, gradient_oracle: torch.Tensor, optimizer) -> int:
+        extremes = 0
+        if (gradient_weight @ gradient_oracle) < 0:
+            # print("bounce!")
+            d1, d2 = self.dist(gradient_weight, gradient_oracle)
+            if d1 > self.bounce_th:
+                extremes += 1
 
-                if mom != 0:
-                    buf = state["momentum_buffer"]
-                    buf.mul_(mom).add_(grad, alpha=1 - damp)
-                    d_p = grad.add(buf, alpha=mom) if nesterov else buf
-                else:
-                    d_p = grad
+            oracle.mul_(d2).add_(weight, alpha=d1)
 
-                p.add_(d_p, alpha=-lr)
+        else:
+            oracle.sub_(gradient_oracle.view_as(oracle), alpha=self.lr)
 
-        # ---- Phase 2: recompute grads via closure (required for bounce)
-        loss = None
-        if closure is None:
-            raise RuntimeError("BounceSGD requires a closure for the second-phase gradients.")
-        loss = closure()  # user should zero grads inside the closure
+        return extremes
 
-        # ---- Phase 3: bounce / second-step logic
-        # Accumulate whether to scale LR for each group; apply once per group.
-        scale_group = [False] * len(self.param_groups)
+    # @torch.no_grad()
+    # def step(self):
+    #     params_current = [0] * self.num_params
+    #     grads_current = params_current.copy()
+    #
+    #     for i, p in enumerate(self.params):
+    #         params_current[i], grads_current[i] = p.clone(), p.grad.clone()
+    #         p.sub_(p.grad, alpha=self.lr)
 
-        for gi, (group, group_snaps) in enumerate(zip(self.param_groups, snapshots)):
-            th = group["bounce_th"]
-            eps = group["convex_eps"]
-            second_lr = group["second_lr"] if group["second_lr"] is not None else group["lr"]
+    def train(self,
+              criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+              train_loader: Iterable[tuple[torch.Tensor, torch.Tensor]],
+              epochs: int):
 
-            for (p, prev_p, prev_g) in group_snaps:
-                if p.grad is None or prev_p is None or prev_g is None:
-                    continue
+        for _ in trange(epochs):
+            for x, y in train_loader:
+                x, y = x.to(self.device, non_blocking=True), y.to(self.device, non_blocking=True)
+                loss = criterion(self.model(x), y)
+                loss.backward()
 
-                g_now = p.grad.reshape(-1)
-                # dot test
-                if torch.dot(prev_g, g_now) < 0:
-                    # convex weights
-                    n1 = prev_g.norm()
-                    n2 = g_now.norm()
-                    s = n1 + n2
-                    if s <= eps:
-                        d1 = d2 = torch.tensor(0.5, dtype=p.dtype, device=p.device)
-                    else:
-                        d1 = n2 / s  # weight on prev param
-                        d2 = n1 / s  # weight on current param
+                with torch.no_grad():
+                    params_current = [0] * self.num_params
+                    grads_current = params_current.copy()
 
-                    # convex combine: p = d2 * p + d1 * prev_p
-                    p.mul_(d2).add_(prev_p, alpha=d1)
+                    for i, p in enumerate(self.params):
+                        if p.requires_grad:
+                            params_current[i], grads_current[i] = p.clone(), p.grad.clone()
+                            p.sub_(p.grad, alpha=self.lr)
+                            p.grad = None
 
-                    if (d1 > th) or (d2 > th):
-                        scale_group[gi] = True
-                else:
-                    # optional extra plain step on the new gradient
-                    p.add_(p.grad, alpha=-second_lr)
+                criterion(self.model(x), y).backward()
 
-        # ---- Phase 4: apply LR scaling once per group (if requested)
-        for gi, group in enumerate(self.param_groups):
-            if scale_group[gi]:
-                group["lr"] = group["lr"] / group["lr_scale"]
 
-        return loss
+
+
