@@ -6,13 +6,15 @@ from tqdm import trange
 from typing import Callable
 import numpy.typing as npt
 
-type Vec = npt.NDArray[float]  # can represent a matrix as well
+type Vec = npt.NDArray  # can represent a matrix as well
 type Input = csr_matrix | Vec
 type LossFunc = Callable[[Input, Vec], float]
 type GradFunc = Callable[[Input, Vec], Vec]
 
 
-def gd(data: Input, loss_f: LossFunc, gradient: GradFunc, lr=1, epochs=50, seed=0) -> tuple[Vec, list[float]]:
+def gd(
+    data: Input, loss_f: LossFunc, gradient: GradFunc, lr=1, epochs=50, seed=0
+) -> tuple[Vec, list[float]]:
     np.random.seed(seed)
     weight = np.random.randn(data.shape[-1])
     losses = [loss_f(data, weight)]
@@ -25,12 +27,23 @@ def gd(data: Input, loss_f: LossFunc, gradient: GradFunc, lr=1, epochs=50, seed=
     return weight, losses
 
 
-def bouncy_gd(data: Input, loss_f: LossFunc, gradient: GradFunc, lr=1, epochs=50, TH=0.7, seed=0, beta=0.995) -> tuple[Vec, list[float]]:
+def bouncy_gd(
+    data: Input,
+    loss_f: LossFunc,
+    gradient: GradFunc,
+    lr=1,
+    epochs=50,
+    TH=0.7,
+    seed=0,
+    beta=0.995,
+) -> tuple[Vec, list[float]]:
     np.random.seed(seed)
     feature_dimensions = data.shape[-1]
     weight = np.random.randn(feature_dimensions)
     losses = [loss_f(data, weight)]
-    lr = np.ones(feature_dimensions) * lr  # per weight (parameter) adaptive learning rate
+    lr = (
+        np.ones(feature_dimensions) * lr
+    )  # per weight (parameter) adaptive learning rate
     sw = 1  # v_t
     e = 1e-08
 
@@ -53,7 +66,7 @@ def bouncy_gd(data: Input, loss_f: LossFunc, gradient: GradFunc, lr=1, epochs=50
                 # print("Cut!")
                 lr /= sw
 
-            weight = (weight * d1 + oracle * d2)
+            weight = weight * d1 + oracle * d2
 
         else:
             weight = oracle - g_orc * lr
@@ -66,7 +79,7 @@ def bouncy_gd(data: Input, loss_f: LossFunc, gradient: GradFunc, lr=1, epochs=50
 def main():
     mem = Memory("./mycache")
     # plt.style.use('seaborn')
-    plt.rcParams['figure.autolayout'] = True
+    plt.rcParams["figure.autolayout"] = True
 
     EPOCHS: int = 50
     LR: int = 1000
@@ -92,22 +105,24 @@ def main():
         return gradient
 
     _, losses_gd = gd(data, logistic_loss, logistic_grad, lr=LR, epochs=EPOCHS)
-    print(f'Loss GD: {losses_gd[-1]:.4}')
-    plt.semilogy(losses_gd, label='Vanilla GD')
+    print(f"Loss GD: {losses_gd[-1]:.4}")
+    plt.semilogy(losses_gd, label="Vanilla GD")
 
     _, losses_bgd = bouncy_gd(data, logistic_loss, logistic_grad, lr=LR, epochs=EPOCHS)
-    print(f'Loss BGD: {losses_bgd[-1]:.4}')
-    plt.semilogy(losses_bgd, label='Bouncing GD')
+    print(f"Loss BGD: {losses_bgd[-1]:.4}")
+    plt.semilogy(losses_bgd, label="Bouncing GD")
 
-    plt.ylabel('Loss', rotation='horizontal')
-    plt.xlabel('Iterations')
-    plt.gca().text(15, 3, f'$LR={LR}$', c='pink', size=20)
-    plt.legend(prop={'size': 15})
+    plt.ylabel("Loss", rotation="horizontal")
+    plt.xlabel("Iterations")
+    plt.gca().text(15, 3, f"$LR={LR}$", c="pink", size=20)
+    plt.legend(prop={"size": 15})
     plt.tight_layout()
     plt.show()
 
 
-if __name__ == '__main__':  # Such that when you import a function from this script, the whole script doesn't run automatically
+if (
+    __name__ == "__main__"
+):  # Such that when you import a function from this script, the whole script doesn't run automatically
     from joblib import Memory
     from sklearn.datasets import load_svmlight_file
     import matplotlib.pyplot as plt

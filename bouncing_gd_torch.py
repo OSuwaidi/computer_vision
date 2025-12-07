@@ -16,7 +16,7 @@ torch.cuda.empty_cache()
 device = torch.device('cpu')
 
 norm = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-T = transforms.Compose([transforms.ToTensor(), transforms.Lambda(lambda x: torch.cat((x.flatten(), torch.Tensor([1]))))])
+T = transforms.Compose([transforms.ToTensor(), norm, transforms.Lambda(lambda x: torch.cat((x.flatten(), torch.Tensor([1]))))])
 train_data = datasets.MNIST(root=f'datasets/MNIST', download=True, transform=T)  # (BS, 785)
 test_data = datasets.MNIST(root=f'datasets/MNIST', train=False, transform=T)
 

@@ -27,11 +27,11 @@ test_data = datasets.MNIST(root='data', train=False,
 # prepare data loaders
 train_loader = DataLoader(train_data, batch_size=batch_size)  # DataLoader(dataset, batch_size=1, shuffle=False, num_workers=0, pin_memory=False, drop_last=False, timeout=0, prefetch_factor=2, persistent_workers=False)
 test_loader = DataLoader(test_data, batch_size=batch_size)
-# "num_workers: how many subprocesses to use for data loading. 0 means that the data will be loaded in the main process --> If num_workers=2 you have at most 2 workers simultaneously putting data (batches) into RAM
+# "num_workers: how many subprocesses to use for data loading. 0 means that the data will be loaded in the main process --> If num_workers=2 you have at most 2 workers simultaneously pushing data (batches) into RAM
 # "num_workers" is analogous with number of CPU cores available to load/fetch data
-# "pin_memory": automatically puts the fetched/read data Tensors into pinned memory (memory that is persistent, non-paged memory) for direct GPU access (DMA).
+# "pin_memory": automatically puts the fetched/read data Tensors into pinned memory (memory that is persistent, non-paged memory) for Direct GPU (Memory) Access (DMA).
 # It removes the need for: fetch data from CPU pageable memory -> driver (CUDA) copies it to temporary pinned buffer -> GPU direct memory access -> free buffer
-# It gets streamlined with "pin_memory" into: fetch data from CPU pinned memory (directly) ->  GPU direct memory access
+# That gets streamlined with "pin_memory" into: fetch data from CPU pinned (reserved) memory (directly) ->  GPU direct memory access
 # "drop_last": drops the last non-full batch of each worker’s dataset replica --> Used when (number_of_images/batch_size) doesn't yield a whole number
 # "prefetch_factor": number of samples loaded in advance by each worker. 2 means there will be a total of 2 * num_workers samples prefetched across all workers
 # "persistent_workers": if True, the data loader will not shutdown the worker processes after a dataset has been consumed once

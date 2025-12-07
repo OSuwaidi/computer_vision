@@ -5,7 +5,7 @@ import torch.nn.functional as F
 
 class VAE(nn.Module):
     def __init__(self, input_dim=784, hidden_dim=400, latent_dim=2):
-        super(VAE, self).__init__()
+        super().__init__()
         # Encoder
         self.fc1 = nn.Linear(input_dim, hidden_dim)
         self.fc_mu = nn.Linear(hidden_dim, latent_dim)
