@@ -16,6 +16,8 @@ from torchvision.datasets import ImageFolder
 from torchvision.transforms import v2
 from models.FR import FaceNet
 
+# This entire script will launch/run for every GPU (process) individually!
+
 def fix_facecrub(facescrub_path: Path):
     # Move all person's image folders into one unified root directory:
     for genders in facescrub_path.iterdir():
@@ -23,19 +25,16 @@ def fix_facecrub(facescrub_path: Path):
             shutil.move(person, facescrub_path)
         genders.rmdir()
 
-
-# This entire script will launch/run for every GPU (process) individually!
-
-# Each process (GPU) will receive this BS ==> effective BS is = num_GPUs * BS
+world_size = torch.cuda.device_count()  # total number of processes
+# Each process (GPU) will receive this complete BS ==> effective BS = num_GPUs * BS
 # Hence, to get the desired gradient BS, make sure you divide by the number of GPUs
-BS = 2 ** 7
-NUM_WORKERS = 8
+BS = 2 ** 7 // world_size
+NUM_WORKERS = world_size * 4  # 4 workers per GPU
 EPOCHS = 5
 LR = 1e-3
 WD = 5e-5
 SEED = 42
 device = "cuda"
-world_size = torch.cuda.device_count()  # total number of processes
 torch.backends.cudnn.benchmark = True
 CEL = nn.CrossEntropyLoss()
 
@@ -46,26 +45,13 @@ torch.cuda.manual_seed_all(SEED)
 generator = torch.Generator().manual_seed(SEED)
 
 
-class TransformData(Dataset):
-    def __init__(self, data, transforms):
-        self.data = data
-        self.T = transforms
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        x, y = self.data[idx]
-        return self.T(x), y
-
-
 def train(gpu_id: int, epochs, model, train_loader, optimizer, scheduler):
     model.train()
-    iters_per_epoch = len(train_loader)
+    iters_per_epoch = len(train_loader)  # number (not size) of batches processed per epoch
     total_samples = train_loader.batch_size * get_world_size() * iters_per_epoch  # "get_world_size()" only works AFTER initializing default process group
 
     for e in range(1, epochs + 1):
-        loop = tqdm(train_loader, desc=f"Epoch {e}", disable=(gpu_id != 0))
+        loop = tqdm(train_loader, desc=f"Epoch {e}", disable=(gpu_id != 0))  # only print on GPU 0
         train_loader.sampler.set_epoch(e)  # this ensures data shuffling (randomization) for different epochs
 
         epoch_loss = torch.zeros((), device=gpu_id)  # running epoch loss
@@ -126,13 +112,13 @@ def setup_ddp(rank: int) -> None:
     # To get default supported backend: "torch.distributed.get_default_backend_for_device(device_type)"
 
 
-# Runs for each process (rank). Any function used below must be defined on the global scope (accessible to all processes). Below you define per-process procedures.
+# Runs for each child process (rank). Any function used below must be defined on global scope (accessible to all processes). Below you define per-process procedures.
 def main(rank: int, train_dataset, test_dataset):
     setup_ddp(rank)
     print(f"setup complete for gpu# {rank}.")
     train_loader = DataLoader(
         train_dataset,
-        BS // world_size,
+        BS,  # per GPU BS (not effective/global BS)
         num_workers=NUM_WORKERS,
         persistent_workers=True,
         shuffle=False,
@@ -140,17 +126,19 @@ def main(rank: int, train_dataset, test_dataset):
         pin_memory=True,
         sampler=DistributedSampler(train_dataset, shuffle=True, drop_last=False)
     )
+    # Each process (GPU) gets its own copy of the model
     model = FaceNet(num_classes=len(train_dataset.data.dataset.classes), embedding_size=128, use_SE=False, ).to(rank)
     model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
-    model = DDP(model, device_ids=[rank])  # you can also get the rank dynamically via "dist.get_rank()"
+    model = DDP(model, device_ids=[rank])  # you can also get the rank dynamically via "torch.distributed.get_rank()"
     # optim = torch.optim.SGD(model.parameters(), LR, 0.8, weight_decay=WD)
     optim = torch.optim.AdamW(model.parameters(), LR, weight_decay=WD)
     sched = torch.optim.lr_scheduler.OneCycleLR(optim, max_lr=LR, total_steps=EPOCHS * len(train_loader), pct_start=0.1, div_factor=20, final_div_factor=1e3)
 
     train_loss, train_acc = train(rank, EPOCHS, model, train_loader, optim, sched)
 
+    # Since each GPU has its own copy of the same trained model, run the testing on GPU 0:
     if rank == 0:
-        test_loader = DataLoader(test_dataset, batch_size=BS, num_workers=NUM_WORKERS, pin_memory=True)
+        test_loader = DataLoader(test_dataset, batch_size=BS * world_size, num_workers=NUM_WORKERS, pin_memory=True)
         test_acc = test(model, test_loader)
 
         torch.save(
@@ -169,7 +157,7 @@ def main(rank: int, train_dataset, test_dataset):
     destroy_process_group()
 
 
-if __name__ == "__main__":  # child processes spawned by multiprocessing do NOT execute this block! This is only executed by a **single** main "parent" process.
+if __name__ == "__main__":  # child processes spawned by multiprocessing do NOT execute this block! This is ONLY executed by a **single** main "parent" process.
     os.environ["MASTER_ADDR"] = "localhost"  # 127.0.0.1
     os.environ["MASTER_PORT"] = "29500"
     # v2.ColorJitter(brightness=0.2, contrast=0.2)
@@ -188,12 +176,24 @@ if __name__ == "__main__":  # child processes spawned by multiprocessing do NOT 
     ])
 
     facescrub = Path("datasets/facescrub")
-    dataset = ImageFolder(facescrub, transform=T)  # default loader function is `PIL.Image.open()`
+    dataset = ImageFolder(facescrub, transform=T)  # default image loader function is `PIL.Image.open()`
 
     train_data, test_data = random_split(dataset, [0.9, 0.1], generator=generator)
+
+    class TransformData(Dataset):
+        def __init__(self, data, transforms):
+            self.data = data
+            self.T = transforms
+
+        def __len__(self):
+            return len(self.data)
+
+        def __getitem__(self, idx):
+            x, y = self.data[idx]
+            return self.T(x), y
 
     train_data = TransformData(train_data, T_train)
     test_data = TransformData(test_data, T_test)
 
-    # Arguments to child processes are pickled and sent to each. A Dataset object is often not picklable (transforms, lambdas, etc.)
-    mp.spawn(main, args=(train_data, test_data), nprocs=world_size, join=True)  # first argument is implicitly the process id (auto-allocated as rank by DDP)
+    # Arguments passed to "main" child processes are pickled and sent to each. A Dataset object is often not picklable (transforms, lambdas, etc.)
+    mp.spawn(main, args=(train_data, test_data), nprocs=world_size, join=True)  # first argument is implicitly the process id/index (auto-allocated as rank by DDP)
