@@ -41,9 +41,7 @@ def bouncy_gd(
     feature_dimensions = data.shape[-1]
     weight = np.random.randn(feature_dimensions)
     losses = [loss_f(data, weight)]
-    lr = (
-        np.ones(feature_dimensions) * lr
-    )  # per weight (parameter) adaptive learning rate
+    lr = np.ones(feature_dimensions) * lr  # per weight (parameter) adaptive learning rate
     sw = 1  # v_t
     e = 1e-08
 
@@ -120,9 +118,7 @@ def main():
     plt.show()
 
 
-if (
-    __name__ == "__main__"
-):  # Such that when you import a function from this script, the whole script doesn't run automatically
+if __name__ == "__main__":  # Such that when you import a function from this script, the whole script doesn't run automatically
     from joblib import Memory
     from sklearn.datasets import load_svmlight_file
     import matplotlib.pyplot as plt

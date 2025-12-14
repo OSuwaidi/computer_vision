@@ -12,29 +12,29 @@ class BGD:
         weight_decay (float, optional): L2 penalty (default: 0), *coupled* (like classic SGD)
         bounce_th (float): threshold on d1 to trigger LR scaling (default: 0.7)
         _eps (float): epsilon for convex weights (default: 1e-12)
-        _tolerance (float): maximum value before taking an equidistant weighted average
     """
 
     def __init__(
             self,
             model: nn.Module,
+            criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
             lr: float = 1,
             weight_decay: float = 0.0,
             use_second_moment: bool = False,
-            beta2: float = 0.999,
+            beta: float = 0.999,
             bounce_th: float = 0.7,
             non_blocking: bool = False,
             _eps: float = 1e-9,
-            _tolerance: float = 1e-11,
     ):
         if lr <= 0.0:
             raise ValueError(f"Invalid lr: {lr}")
         if weight_decay < 0.0:
             raise ValueError(f"Invalid weight_decay: {weight_decay}")
-        if not (0.0 <= beta2 < 1.0):
-            raise ValueError(f"Invalid beta: {beta2}")
+        if not (0.0 <= beta < 1.0):
+            raise ValueError(f"Invalid beta: {beta}")
 
         self.model = model
+        self.criterion = criterion
         self.trainable_params: list[nn.Parameter] = []
         self._params_prev: list[torch.Tensor] = []
         self._grads_prev: list[torch.Tensor] = []
@@ -51,16 +51,16 @@ class BGD:
         self.layer_scale: torch.Tensor = torch.ones(len(self.trainable_params), device=self.device)  # per-layer (not per-param) adaptive learning rate
         self.lr = lr
         self._t: int = 0
-        self.beta2 = beta2
+        self.beta = beta
         self.bounce_th = bounce_th
         self.non_blocking = non_blocking
         self._eps = _eps
-        self._tolerance = _tolerance
         self.get_second_moment = self._get_second_moment if use_second_moment else lambda *_: 1.
 
     def _get_second_moment(self, idx, gradient: torch.Tensor) -> torch.Tensor:
-        self.second_moment[idx].mul_(self.beta2).add_(gradient.abs(), alpha=1 - self.beta2)  # update second moment
-        return self.second_moment[idx] / (1. - self.beta2 ** self._t)  # unbiased second moment
+        # TODO: experiment with corrected unbiased second moment (should only be computed after the first iteration) (v_t - B^t * c) / (1 - B^t)
+        self.second_moment[idx].mul_(self.beta).add_(gradient.abs(), alpha=1 - self.beta)  # update second moment
+        return (self.second_moment[idx] - self.beta ** self._t) / (1. - self.beta ** self._t)  # unbiased second moment
 
     def _bounce_update(self, idx: int, weight: torch.Tensor, oracle: torch.Tensor, gradient_weight: torch.Tensor, gradient_oracle: torch.Tensor) -> None:
         # Note: ".item()" on a GPU tensor would cause it to sync and transfer (copy) to host (CPU)
@@ -69,7 +69,7 @@ class BGD:
             # print("bounce!")
             f1, f2 = torch.linalg.vector_norm(gradient_weight), torch.linalg.vector_norm(gradient_oracle)
             s = f1 + f2
-            if not s.item() < self._tolerance:
+            if not s.item() < self._eps:
                 s.add_(self._eps)
                 d1, d2 = f2 / s, f1 / s
             else:
@@ -89,7 +89,7 @@ class BGD:
     @staticmethod
     def _bn_eval(bn: nn.Module) -> None:
         if isinstance(bn, nn.modules.batchnorm._BatchNorm):
-            bn.train(False)  # same as bn.eval() for BN
+            bn.train(False)  # same as bn.eval()
 
     @staticmethod
     def _bn_train(bn: nn.Module) -> None:
@@ -97,14 +97,13 @@ class BGD:
             bn.train(True)
 
     def train(self,
-              criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
               train_loader: torch.utils.data.DataLoader, ) -> float:
         self.model.train()
         epoch_loss = 0.
         # TODO: set a lower bound on the minimum possible lr (e.g. 0.0001)?
         for x, y in train_loader:
             x, y = x.to(self.device, non_blocking=self.non_blocking), y.to(self.device, non_blocking=self.non_blocking)
-            loss = criterion(self.model(x), y)
+            loss = self.criterion(self.model(x), y)
             epoch_loss += loss.item()
             loss.backward()
             self._t += 1
@@ -119,7 +118,7 @@ class BGD:
                     p.grad = None
 
             self.model.apply(self._bn_eval)
-            criterion(self.model(x), y).backward()
+            self.criterion(self.model(x), y).backward()
             self.model.apply(self._bn_train)
             self._t += 1
 
