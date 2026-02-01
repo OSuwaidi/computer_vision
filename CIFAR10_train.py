@@ -30,7 +30,11 @@ NUM_WORKERS = 0
 model = resnet20(3, 10).to(device)
 
 norm = transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2023, 0.1994, 0.2010])
-train_T = transforms.Compose([transforms.RandomHorizontalFlip(p=0.25), transforms.RandomCrop(32, padding=4), transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1), transforms.ToTensor(), norm])
+train_T = transforms.Compose([transforms.RandomHorizontalFlip(p=0.25),
+                              transforms.RandomCrop(32, padding=4),
+                              transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+                              transforms.ToTensor(),
+                              norm])
 test_T = transforms.Compose([transforms.ToTensor(), norm])
 
 train_data = datasets.CIFAR10(root='datasets/CIFAR10', train=True, transform=train_T, download=True)

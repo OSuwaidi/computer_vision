@@ -47,23 +47,21 @@ generator = torch.Generator().manual_seed(SEED)
 
 def train(gpu_id: int, epochs, model, train_loader, optimizer, scheduler):
     model.train()
-    iters_per_epoch = len(train_loader)  # number (not size) of batches processed per epoch
-    total_samples = train_loader.batch_size * get_world_size() * iters_per_epoch  # "get_world_size()" only works AFTER initializing default process group
 
     for e in range(1, epochs + 1):
-        loop = tqdm(train_loader, desc=f"Epoch {e}", disable=(gpu_id != 0))  # only print on GPU 0
         train_loader.sampler.set_epoch(e)  # this ensures data shuffling (randomization) for different epochs
-
         epoch_loss = torch.zeros((), device=gpu_id)  # running epoch loss
         correct = torch.zeros((), device=gpu_id, dtype=torch.int32)
-        for x, y in loop:
+        n_samples = torch.zeros((), device=gpu_id, dtype=torch.int32)
+
+        for x, y in tqdm(train_loader, desc=f"Epoch {e}", disable=(gpu_id != 0)):  # only print on GPU 0
             x, y = x.to(gpu_id, non_blocking=True), y.to(gpu_id, non_blocking=True)
             embedding = model(x)
             logits = model.module.classify(embedding, y)
-            loss = CEL(logits, y)  # rank-local loss
+            loss = CEL(logits, y)  # rank-local loss (mean over batch)
 
             optimizer.zero_grad(set_to_none=True)
-            loss.backward()  # DDP all-reduces gradients via AVG operation across processes (resulting in gradient for global BS)
+            loss.backward()  # DDP all-reduces gradients (synchronously) via AVG operation across processes (resulting in gradient for global BS)
             optimizer.step()
             scheduler.step()
 
@@ -72,44 +70,56 @@ def train(gpu_id: int, epochs, model, train_loader, optimizer, scheduler):
                 true_logits = F.linear(embedding, W)  # no margin logits
                 pred = true_logits.argmax(1)  # highest classification class
 
-                epoch_loss += loss
+                bsz = y.shape[0]
+                epoch_loss += loss * bsz
+                n_samples += bsz
                 correct += pred.eq(y).sum()
 
         with torch.inference_mode():
-            # Collective calls must run on all ranks:
-            reduce(epoch_loss, dst=0, op=ReduceOp.AVG)
+            # Collective (aggregating) calls must run on all ranks:
+            reduce(epoch_loss, dst=0, op=ReduceOp.SUM)
             reduce(correct, dst=0, op=ReduceOp.SUM)
+            reduce(n_samples, dst=0, op=ReduceOp.SUM)
 
         if gpu_id == 0:
-            print(f"Epoch {e}/{EPOCHS} | loss: {epoch_loss / iters_per_epoch:.4} | Acc: {correct / total_samples:.2%}")
+            print(f"Epoch {e}/{EPOCHS} | loss: {(epoch_loss / n_samples).item():.4} | Acc: {(correct.float() / n_samples).item():.2%}")
 
-    final_loss = epoch_loss.item() / iters_per_epoch
-    final_acc = correct.item() / total_samples * 100.
-    return final_loss, final_acc
+    if gpu_id == 0:
+        final_loss = (epoch_loss / n_samples).item()
+        final_acc = (correct.float() / n_samples).item() * 100.
+        return final_loss, final_acc
+
+    return None
 
 
 @torch.inference_mode()
-def test(model, test_loader):
+def test(gpu_id: int, model, test_loader):
     model.eval()
-    correct = 0
-    total = 0
-    for x, y in tqdm(test_loader):
-        x, y = x.to(device), y.to(device)  # defaults to device cuda:0
+    correct = torch.zeros((), device=gpu_id, dtype=torch.int32)
+    total = torch.zeros((), device=gpu_id, dtype=torch.int32)
+    for x, y in tqdm(test_loader, desc=f"Evaluating...", disable=(gpu_id != 0)):
+        x, y = x.to(gpu_id, non_blocking=True), y.to(gpu_id, non_blocking=True)
         embedding = model(x)
         pred = model.module.classify(embedding, y).argmax(1)
         correct += pred.eq(y).sum()
         total += y.numel()
 
-    acc = correct.item() / total
-    print(f"Top-1 Test Accuracy: {acc:.2%}")
-    return acc * 100.
+    reduce(correct, dst=0, op=ReduceOp.SUM)
+    reduce(total, dst=0, op=ReduceOp.SUM)
 
+    if gpu_id == 0:
+        acc = (correct.float() / total).item()
+        print(f"Top-1 Test Accuracy: {acc:.2%}")
+        return acc * 100.
+
+    return None
 
 def setup_ddp(rank: int) -> None:
     # rank ∈ [0, world_size-1] --> unique process/GPU id
     torch.cuda.set_device(rank)  # to ensure that each process runs exclusively on a single GPU
-    init_process_group(backend="nccl", rank=rank, world_size=world_size)
     # To get default supported backend: "torch.distributed.get_default_backend_for_device(device_type)"
+    init_process_group(backend="nccl", rank=rank, world_size=world_size)
+    # You can run "get_world_size()" only AFTER initializing default process group
 
 
 # Runs for each child process (rank). Any function used below must be defined on global scope (accessible to all processes). Below you define per-process procedures.
@@ -122,9 +132,9 @@ def main(rank: int, train_dataset, test_dataset):
         num_workers=NUM_WORKERS,
         persistent_workers=True,
         shuffle=False,
-        drop_last=True,
+        drop_last=True,  # False drops the last (incomplete) batch if its size is not equivalent to the defined batch size
         pin_memory=True,
-        sampler=DistributedSampler(train_dataset, shuffle=True, drop_last=False)
+        sampler=DistributedSampler(train_dataset, shuffle=True, drop_last=True)  # False makes data evenly divisible across GPUs/ranks by repeating samples
     )
     # Each process (GPU) gets its own copy of the model
     model = FaceNet(num_classes=len(train_dataset.data.dataset.classes), embedding_size=128, use_SE=False, ).to(rank)
@@ -136,11 +146,17 @@ def main(rank: int, train_dataset, test_dataset):
 
     train_loss, train_acc = train(rank, EPOCHS, model, train_loader, optim, sched)
 
-    # Since each GPU has its own copy of the same trained model, run the testing on GPU 0:
-    if rank == 0:
-        test_loader = DataLoader(test_dataset, batch_size=BS * world_size, num_workers=NUM_WORKERS, pin_memory=True)
-        test_acc = test(model, test_loader)
+    test_loader = DataLoader(test_dataset,
+                             batch_size=BS*2,
+                             num_workers=NUM_WORKERS,
+                             pin_memory=True,
+                             drop_last=False,
+                             sampler=DistributedSampler(test_dataset, shuffle=False, drop_last=False)
+                             )
+    test_acc = test(model, test_loader)
 
+    # Since each GPU has its own copy of the same trained model, and we saved our results on GPU 0:
+    if rank == 0:
         torch.save(
             {
                 'model_state_dict': model.module.state_dict(),
@@ -160,21 +176,11 @@ def main(rank: int, train_dataset, test_dataset):
 if __name__ == "__main__":  # child processes spawned by multiprocessing do NOT execute this block! This is ONLY executed by a **single** main "parent" process.
     os.environ["MASTER_ADDR"] = "localhost"  # 127.0.0.1
     os.environ["MASTER_PORT"] = "29500"
-    # v2.ColorJitter(brightness=0.2, contrast=0.2)
+
     T = v2.Compose([
-        v2.PILToTensor(),  # dtype is torch.uint8
+        v2.PILToTensor(),  # dtype is torch.uint8; "v2.ToImage()" works more generally (converts to image tensor)
         v2.Resize((112, 112))
     ])
-    T_train = v2.Compose([
-        v2.RandomHorizontalFlip(0.5),
-        v2.ToDtype(torch.float32, scale=True),
-        v2.Normalize([0.5] * 3, [0.5] * 3)
-    ])
-    T_test = v2.Compose([
-        v2.ToDtype(torch.float32, scale=True),
-        v2.Normalize([0.5] * 3, [0.5] * 3)
-    ])
-
     facescrub = Path("datasets/facescrub")
     dataset = ImageFolder(facescrub, transform=T)  # default image loader function is `PIL.Image.open()`
 
@@ -192,6 +198,16 @@ if __name__ == "__main__":  # child processes spawned by multiprocessing do NOT 
             x, y = self.data[idx]
             return self.T(x), y
 
+    T_train = v2.Compose([
+        # v2.ColorJitter(brightness=0.2, contrast=0.2),
+        v2.RandomHorizontalFlip(0.5),
+        v2.ToDtype(torch.float32, scale=True),
+        v2.Normalize([0.5] * 3, [0.5] * 3)
+    ])
+    T_test = v2.Compose([
+        v2.ToDtype(torch.float32, scale=True),
+        v2.Normalize([0.5] * 3, [0.5] * 3)
+    ])
     train_data = TransformData(train_data, T_train)
     test_data = TransformData(test_data, T_test)
 
