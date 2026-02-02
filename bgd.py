@@ -1,8 +1,7 @@
-
 from typing import Callable
 import torch
 import torch.nn as nn
-import numpy as np
+from torch.nn.utils import parameters_to_vector, vector_to_parameters
 
 
 class BGD:
@@ -17,48 +16,49 @@ class BGD:
             self,
             model: nn.Module,
             lr: float = 0.1,
-            beta: float = 0.9,
-            _eps: float = 1e-8,
             non_blocking: bool = False,
+            _eps: float = 1e-8,
+            beta: float = 0.9,
     ):
         if lr <= 0.0:
             raise ValueError(f"Invalid lr: {lr}")
 
         self.model = model
-        self.trainable_params: list[nn.Parameter] = []
-        self._prev_params: list[torch.Tensor] = []
-        self._first_moment: list[torch.Tensor] = []
-        for param in model.parameters():
-            if param.requires_grad:
-                self.trainable_params.append(param)  # store reference (pointer) to actual model parameters
-                self._prev_params.append(torch.empty_like(param))
-                self._first_moment.append(torch.zeros_like(param))
+        self.trainable_params: list[nn.Parameter] = [p for p in model.parameters() if p.requires_grad]
+        with torch.no_grad():
+            params_vec = parameters_to_vector(self.trainable_params)
 
-        self.device = param.device
+        self._prev_params: torch.Tensor = torch.empty_like(params_vec)
+        self._v: torch.Tensor = torch.zeros_like(params_vec)
+
+        del params_vec
+
+        self.device = self.trainable_params[0].device
         self.lr = lr
         self.non_blocking: bool = non_blocking
         self._eps: float = _eps
         self.epoch_losses: list[float] = []
         self.b = beta
-        self.t = np.zeros(len(self.trainable_params), dtype=np.uint32)
 
-    def _bounce_update(self, idx: int, curr_p: torch.Tensor) -> None:
-        prev_grad = self._first_moment[idx]
-        curr_grad = curr_p.grad
-        if (prev_grad.view(-1) @ curr_grad.view(-1)) < 0.:
+    @torch.no_grad()
+    def _bounce_update(self, curr_p: torch.Tensor) -> None:
+        curr_grad = self._get_grads_vec()  # re-calculate gradients at the new position
+        if (self._v @ curr_grad) < 0.:
             # print("bounce!")
-            w = curr_grad.abs().sub_(prev_grad.abs()).sigmoid_()
+            w = curr_grad.abs_().sub_(self._v.abs_()).sigmoid_()
 
-            mixed_grads = curr_grad.lerp_(prev_grad, weight=w)
-            prev_grad.zero_().lerp_(mixed_grads, weight=(1. - self.b))
-            self.t[idx] = 1
+            self._v.zero_()
 
-            # curr_p.mul_(d2).add_(self._prev_params[idx], alpha=d1)
-            curr_p.lerp_(self._prev_params[idx], weight=w)
+            curr_p.lerp_(self._prev_params, weight=w)
 
         else:
-            # curr_p.data = curr_p - curr_grad * self.lr
-            curr_p.sub_(curr_grad, alpha=self.lr)
+            curr_p.sub_(curr_grad, alpha=self.lr)  # TODO: div this lr by 2?
+
+        vector_to_parameters(curr_p, self.trainable_params)
+        self.model.zero_grad(set_to_none=True)
+
+    def _get_grads_vec(self) -> torch.Tensor:
+        return parameters_to_vector([p.grad for p in self.trainable_params])
 
     def train(self, train_loader: torch.utils.data.DataLoader, criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor]) -> float:
         self.model.train()
@@ -71,33 +71,29 @@ class BGD:
             epoch_loss += loss.item() * bsz
             n_samples += bsz
             loss.backward()
-            self.t += 1
 
             # --- Preliminary Update ---
             with torch.no_grad():
-                for i, p in enumerate(self.trainable_params):
-                    self._prev_params[i].copy_(p)
+                P = parameters_to_vector(self.trainable_params)
+                G = self._get_grads_vec()
+                self._prev_params.copy_(P)
 
-                    # Update moment
-                    m = self._first_moment[i].lerp_(p.grad, weight=(1. - self.b))
+                # Update velocity (momentum)
+                v = self._v.mul_(self.b).add_(G)
 
-                    # Bias correction
-                    b_corr = 1. - self.b ** self.t[i].item()
+                # Apply update
+                P.sub_(v, alpha=self.lr)
 
-                    # Apply update
-                    p.sub_(m, alpha=self.lr/b_corr)  # TODO: WHAT IF WE MOVE BASED ON g, NOT m (USE m TO POPULATE ONLY)???!!! AND WHAT IF WE USE POLYAK MOMENTUM HERE?
-                    p.grad = None
+                # PUSH BACK: Write the updated flat params into the actual model layers
+                vector_to_parameters(P, self.trainable_params)
+
+                self.model.zero_grad(set_to_none=True)
 
             # --- Second Forward/Backward Pass (Lookahead) ---
-            # Re-calculate gradients at the new position
             criterion(self.model(x), y).backward()
 
-            with torch.no_grad():
-                for i, p in enumerate(self.trainable_params):
-                    self._bounce_update(i, p)
-                    p.grad = None
+            self._bounce_update(P)
 
-        # self.epoch_losses.append(epoch_loss / n_samples)
         return epoch_loss / n_samples
 
     @torch.inference_mode()
