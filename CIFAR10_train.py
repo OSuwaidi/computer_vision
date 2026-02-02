@@ -3,8 +3,9 @@
 import torch
 import numpy as np
 import random
-from computer_vision.models.resnet import resnet20
-from torchvision import datasets, transforms
+from models.resnet import resnet20
+from torchvision import datasets
+from torchvision.transforms import v2
 from torch.utils.data import DataLoader, Subset
 from tqdm.auto import trange, tqdm
 import torch.nn.functional as F
@@ -29,16 +30,26 @@ NUM_WORKERS = 0
 
 model = resnet20(3, 10).to(device)
 
-norm = transforms.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2023, 0.1994, 0.2010])
-train_T = transforms.Compose([transforms.RandomHorizontalFlip(p=0.25),
-                              transforms.RandomCrop(32, padding=4),
-                              transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
-                              transforms.ToTensor(),
-                              norm])
-test_T = transforms.Compose([transforms.ToTensor(), norm])
+m, s = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
+norm = v2.Normalize(mean=m, std=s)
+T_train = v2.Compose([
+    v2.PILToTensor(),
+    v2.RandomCrop(32, padding=4, padding_mode='reflect'),
+    v2.RandomHorizontalFlip(),
+    # v2.RandAugment(num_ops=2, magnitude=9, fill=fill),
+    v2.TrivialAugmentWide(),  # try AutoAugment
+    v2.ToDtype(torch.float32, scale=True),
+    norm,
+    v2.RandomErasing(p=0.25, scale=(0.02, 0.15), ratio=(0.3, 3.3), value=0),
+])
+T_test = v2.Compose([
+    v2.PILToTensor(),
+    v2.ToDtype(torch.float32, scale=True),
+    norm,
+])
 
-train_data = datasets.CIFAR10(root='datasets/CIFAR10', train=True, transform=train_T, download=True)
-test_data = datasets.CIFAR10(root='datasets/CIFAR10', train=False, transform=test_T)
+train_data = datasets.CIFAR10(root='datasets/CIFAR10', train=True, transform=T_train, download=True)
+test_data = datasets.CIFAR10(root='datasets/CIFAR10', train=False, transform=T_test)
 
 # If you set "num_workers" > 0, each worker in "DataLoader" will have its own RNG state, independent on the global RNG
 train_loader = DataLoader(train_data, batch_size=BS, shuffle=True, pin_memory=True, num_workers=NUM_WORKERS, generator=torch.Generator().manual_seed(seed))
@@ -55,7 +66,7 @@ scheduler = torch.optim.lr_scheduler.OneCycleLR(optim, LR, epochs=EPOCHS, steps_
 losses = []
 for e in trange(EPOCHS, desc="Training Epochs", leave=True):
     epoch_loss = 0
-    for x, y in tqdm(train_loader, leave=False, desc=f"Epoch {e+1}/{EPOCHS} Progress", position=0):
+    for x, y in tqdm(train_loader, leave=False, desc=f"Epoch {e + 1}/{EPOCHS} Progress", position=0):
         x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
 
         # Forward pass and compute loss
@@ -79,7 +90,7 @@ with torch.no_grad():
         predictions = model(x).argmax(1)
         accuracy += (predictions == y).float().sum().item()
 
-print(f'Accuracy: {accuracy/len(test_data)*100:.4}%')
+print(f'Accuracy: {accuracy / len(test_data) * 100:.4}%')
 
 plt.plot(losses)
 plt.xlabel("Epoch")
