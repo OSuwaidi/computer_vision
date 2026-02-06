@@ -4,7 +4,7 @@ import torch.nn as nn
 from torch.nn.utils import parameters_to_vector, vector_to_parameters
 
 
-class BGD:
+class BGD:  # TODO: Try Global Batch BGD
     r"""
     Args:
         model (callable): model (nn.Module) containing trainable parameters to optimize via BGD
@@ -28,7 +28,7 @@ class BGD:
         with torch.no_grad():
             params_vec = parameters_to_vector(self.trainable_params)
 
-        self._prev_params: torch.Tensor = torch.empty_like(params_vec)
+        self._prev_P: torch.Tensor = torch.empty_like(params_vec)
         self._v: torch.Tensor = torch.zeros_like(params_vec)
 
         del params_vec
@@ -41,20 +41,20 @@ class BGD:
         self.b = beta
 
     @torch.no_grad()
-    def _bounce_update(self, curr_p: torch.Tensor) -> None:
-        curr_grad = self._get_grads_vec()  # re-calculate gradients at the new position
-        if (self._v @ curr_grad) < 0.:
+    def _bounce_update(self, curr_P: torch.Tensor) -> None:
+        curr_G = self._get_grads_vec()  # re-calculate gradients at the new position
+        if (self._v @ curr_G) < 0.:
             # print("bounce!")
-            w = curr_grad.abs_().sub_(self._v.abs_()).sigmoid_()
+            w = curr_G.sub_(self._v).sigmoid_()
 
             self._v.zero_()
 
-            curr_p.lerp_(self._prev_params, weight=w)
+            curr_P.lerp_(self._prev_P, weight=w)
 
         else:
-            curr_p.sub_(curr_grad, alpha=self.lr)  # TODO: div this lr by 2?
+            curr_P.sub_(curr_G, alpha=self.lr)
 
-        vector_to_parameters(curr_p, self.trainable_params)
+        vector_to_parameters(curr_P, self.trainable_params)
         self.model.zero_grad(set_to_none=True)
 
     def _get_grads_vec(self) -> torch.Tensor:
@@ -76,7 +76,7 @@ class BGD:
             with torch.no_grad():
                 P = parameters_to_vector(self.trainable_params)
                 G = self._get_grads_vec()
-                self._prev_params.copy_(P)
+                self._prev_P.copy_(P)
 
                 # Update velocity (momentum)
                 v = self._v.mul_(self.b).add_(G)

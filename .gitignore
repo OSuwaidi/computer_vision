@@ -55,6 +55,7 @@ test*.py
 *.png
 *.pth
 wandb/
+tests/
 
 # Datasets
 datasets/
