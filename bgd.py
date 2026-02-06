@@ -45,14 +45,14 @@ class BGD:  # TODO: Try Global Batch BGD
         curr_G = self._get_grads_vec()  # re-calculate gradients at the new position
         if (self._v @ curr_G) < 0.:
             # print("bounce!")
-            w = curr_G.sub_(self._v).sigmoid_()
+            w = curr_G.abs_().sub_(self._v.abs_()).sigmoid_()
 
             self._v.zero_()
 
             curr_P.lerp_(self._prev_P, weight=w)
 
         else:
-            curr_P.sub_(curr_G, alpha=self.lr)
+            curr_P.sub_(curr_G, alpha=self.lr)  # times 2?
 
         vector_to_parameters(curr_P, self.trainable_params)
         self.model.zero_grad(set_to_none=True)
